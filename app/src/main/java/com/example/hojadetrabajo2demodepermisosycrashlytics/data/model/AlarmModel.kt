@@ -10,5 +10,6 @@ package com.example.hojadetrabajo2demodepermisosycrashlytics.data.model
 data class AlarmModel(
     val hour: Int = 0,
     val minute: Int = 0,
-    val isActive: Boolean = false
+    val isActive: Boolean = false,
+    val triggerAtMillis: Long = 0L
 )

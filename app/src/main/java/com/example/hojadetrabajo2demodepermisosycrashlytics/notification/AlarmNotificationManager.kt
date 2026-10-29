@@ -1,11 +1,18 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics.notification
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.example.hojadetrabajo2demodepermisosycrashlytics.MainActivity
 
 /**
  * Manages the creation and display of alarm notifications.
@@ -14,7 +21,22 @@ import androidx.core.app.NotificationManagerCompat
  *
  * @param context Application context — safe to store long-term.
  */
-class AlarmNotificationManager(private val context: Context) {
+class AlarmNotificationManager(private val context: Context) : AlarmNotifier {
+
+    private val preferences = context.getSharedPreferences("alarm_notifications", Context.MODE_PRIVATE)
+    override var notificationsEnabled: Boolean
+        get() = preferences.getBoolean("enabled", false)
+        set(value) { preferences.edit().putBoolean("enabled", value).apply() }
+
+    override fun canNotify(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED) return false
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+        return Build.VERSION.SDK_INT < 26 ||
+            context.getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(CHANNEL_ID)?.importance != NotificationManager.IMPORTANCE_NONE
+    }
 
     companion object {
         const val CHANNEL_ID   = "sheep_alarm_channel"
@@ -46,17 +68,25 @@ class AlarmNotificationManager(private val context: Context) {
     /**
      * Posts the alarm-fired notification.
      * On Android 13+ this call requires POST_NOTIFICATIONS; the caller
-     * (ViewModel) is responsible for verifying the permission before invoking.
+     * verifies availability, and this class checks again immediately before posting.
      * A SecurityException is caught and returned as a [Result] failure so the
      * ViewModel can forward it to [CrashReporter].
      */
-    fun showAlarmNotification(): Result<Unit> = runCatching {
+    @SuppressLint("MissingPermission") // canNotify checks POST_NOTIFICATIONS; runCatching covers revocation races.
+    override fun showAlarmNotification(): Result<Unit> = runCatching {
+        if (!notificationsEnabled || !canNotify()) return@runCatching
+        createNotificationChannel()
+        val openApp = PendingIntent.getActivity(
+            context, 0, Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("🐑 ¡Sheep Alarm!")
             .setContentText("Wake up! The sheep have stopped jumping. It's time!")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
+            .setContentIntent(openApp)
             .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
             .build()
 
@@ -64,7 +94,7 @@ class AlarmNotificationManager(private val context: Context) {
     }
 
     /** Cancels the alarm notification if it is still visible in the tray. */
-    fun cancelNotification() {
+    override fun cancelNotification() {
         NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
     }
 }

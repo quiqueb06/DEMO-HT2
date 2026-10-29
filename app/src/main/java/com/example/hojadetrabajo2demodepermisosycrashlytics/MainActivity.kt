@@ -1,6 +1,13 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics
 
 import android.os.Bundle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.datasource.AlarmLocalDataSource
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.AlarmRepositoryImpl
+import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.crash.LogCrashReporter
+import com.example.hojadetrabajo2demodepermisosycrashlytics.viewmodel.AlarmViewModel
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,7 +21,7 @@ import com.example.hojadetrabajo2demodepermisosycrashlytics.ui.theme.HojaDeTraba
  *   1. Create the notification channel (must happen before any notification can be shown).
  *   2. Host [AlarmScreen] inside the app theme.
  *
- * No business logic, no ViewModel access, no data-layer imports live here.
+ * Wires concrete dependencies at the composition root; business logic stays in the ViewModel.
  */
 class MainActivity : ComponentActivity() {
 
@@ -24,11 +31,20 @@ class MainActivity : ComponentActivity() {
 
         // Create notification channel once on startup.
         // Safe to call multiple times — the OS ignores duplicate channel creation.
-        AlarmNotificationManager(applicationContext).createNotificationChannel()
+        val reporter = LogCrashReporter()
+        val notifications = AlarmNotificationManager(applicationContext)
+        runCatching { notifications.createNotificationChannel() }.onFailure(reporter::report)
+        val factory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                require(modelClass.isAssignableFrom(AlarmViewModel::class.java))
+                @Suppress("UNCHECKED_CAST")
+                return AlarmViewModel(AlarmRepositoryImpl(AlarmLocalDataSource()), notifications, reporter) as T
+            }
+        }
 
         setContent {
             HojaDeTrabajo2DemoDePermisosYCrashlyticsTheme {
-                AlarmScreen()
+                AlarmScreen(viewModel = viewModel(factory = factory))
             }
         }
     }

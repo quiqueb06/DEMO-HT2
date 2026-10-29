@@ -33,6 +33,8 @@ enum class NotificationPermissionStatus {
  * @property showNotificationRationale Whether to display the rationale dialog.
  */
 data class AlarmUiState(
+    val notificationsEnabled: Boolean = false,
+    val errorMessage: String? = null,
     val currentTime: String = "00:00:00",
     val alarmHour: Int = 0,
     val alarmMinute: Int = 0,

@@ -1,42 +1,21 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics.ui.components
 
-import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/**
- * Generic, reusable composable that manages a single runtime permission.
- *
- * ## Usage
- * Place this composable anywhere in the tree (it renders nothing itself).
- * Control the request lifecycle via [shouldRequest] — when it flips to `true`,
- * the OS dialog is shown immediately and [onConsumed] is called so the caller
- * can reset the flag.
- *
- * ## Permanent denial detection
- * After each denial the component tracks whether a previous denial occurred.
- * Combined with [ActivityCompat.shouldShowRequestPermissionRationale]:
- * - `showRationale = true`   → simple denial  → [onDenied]
- * - `showRationale = false` AND previously denied → permanent denial → [onPermanentlyDenied]
- * - `showRationale = false` AND first attempt  → edge-case denial  → [onDenied]
- *
- * @param permission            Manifest permission string (e.g. `Manifest.permission.POST_NOTIFICATIONS`).
- * @param shouldRequest         When `true`, the OS dialog is launched on the next recomposition.
- * @param onConsumed            Called immediately after the dialog is launched so the caller
- *                              can set [shouldRequest] back to `false`.
- * @param onGranted             Called when the user grants the permission.
- * @param onDenied              Called when the user denies but can be asked again.
- * @param onPermanentlyDenied   Called when the user has permanently denied the permission.
+/** Generic runtime permission bridge. Only an explicit request opens the OS dialog.
+ * A false rationale alone is ambiguous (first request or dismissed dialog), so remember
+ * a previously observed rationale before treating a subsequent denial as permanent.
  */
 @Composable
 fun PermissionHandler(
@@ -45,55 +24,63 @@ fun PermissionHandler(
     onConsumed: () -> Unit,
     onGranted: () -> Unit,
     onDenied: () -> Unit,
-    onPermanentlyDenied: () -> Unit
+    onPermanentlyDenied: () -> Unit,
+    onStatusChanged: (granted: Boolean, permanentlyDenied: Boolean) -> Unit,
+    onError: (Throwable) -> Unit
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = LocalActivity.current
+    val owner = LocalLifecycleOwner.current
+    val preferences = remember(context) { context.getSharedPreferences("runtime_permissions", Context.MODE_PRIVATE) }
+    val currentGranted by rememberUpdatedState(onGranted)
+    val currentDenied by rememberUpdatedState(onDenied)
+    val currentPermanent by rememberUpdatedState(onPermanentlyDenied)
+    val currentStatus by rememberUpdatedState(onStatusChanged)
+    val currentError by rememberUpdatedState(onError)
 
-    // Survives configuration changes via rememberSaveable
-    var wasAlreadyDeniedBefore by rememberSaveable { mutableStateOf(false) }
+    fun rationale() = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, permission) } ?: false
+    fun granted() = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    fun permanent() = !granted() && !rationale() && preferences.getBoolean("$permission.rationale", false)
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            onGranted()
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
+        if (allowed) {
+            preferences.edit().remove("$permission.rationale").apply()
+            currentGranted()
         } else {
-            val canShowRationale = activity?.let {
-                ActivityCompat.shouldShowRequestPermissionRationale(it, permission)
-            } ?: false
-
-            when {
-                canShowRationale -> {
-                    // System will show "allow" button again → simple denial
-                    wasAlreadyDeniedBefore = true
-                    onDenied()
-                }
-                wasAlreadyDeniedBefore -> {
-                    // showRationale=false after a previous denial → "Don't ask again" was selected
-                    onPermanentlyDenied()
-                }
-                else -> {
-                    // First denial on a device where showRationale stays false (uncommon)
-                    wasAlreadyDeniedBefore = true
-                    onDenied()
-                }
-            }
+            val canAskAgain = rationale()
+            if (canAskAgain) preferences.edit().putBoolean("$permission.rationale", true).apply()
+            if (activity != null && permanent()) currentPermanent() else currentDenied()
         }
     }
 
-    // React to shouldRequest transitions: launch dialog then immediately reset the flag
-    LaunchedEffect(shouldRequest) {
-        if (shouldRequest) {
-            // Fast-path: if already granted, skip the OS dialog
-            if (ContextCompat.checkSelfPermission(context, permission)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
-                onGranted()
-            } else {
-                launcher.launch(permission)
+    DisposableEffect(owner, permission) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                try {
+                    if (granted()) preferences.edit().remove("$permission.rationale").apply()
+                    else if (rationale()) preferences.edit().putBoolean("$permission.rationale", true).apply()
+                    currentStatus(granted(), permanent())
+                } catch (error: Exception) { currentError(error) }
             }
-            onConsumed()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(shouldRequest, permission) {
+        if (shouldRequest) {
+            try {
+                checkNotNull(activity) { "Runtime permission requires an Activity" }
+                when {
+                    granted() -> currentGranted()
+                    permanent() -> currentPermanent()
+                    else -> {
+                        if (rationale()) preferences.edit().putBoolean("$permission.rationale", true).apply()
+                        launcher.launch(permission)
+                    }
+                }
+            } catch (error: Exception) { currentError(error) }
+            finally { onConsumed() }
         }
     }
 }

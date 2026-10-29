@@ -15,6 +15,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.Switch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +38,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,7 +46,6 @@ import androidx.compose.material3.TimePickerDefaults
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,13 +57,13 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmEffect
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmIntent
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmUiState
@@ -84,33 +88,35 @@ private val TextSecondary = Color(0xFF90A4AE)
  * Root MVI screen composable for the Sheep Alarm app.
  *
  * ## MVI rules observed:
- * - Reads state exclusively from [AlarmViewModel.uiState] via [collectAsState].
+ * - Reads state exclusively from [AlarmViewModel.uiState] via lifecycle-aware collection.
  * - Sends actions exclusively via [AlarmViewModel.processIntent].
  * - One-shot effects are consumed via [LaunchedEffect] on [AlarmViewModel.effects].
  * - Never imports or references [AlarmRepository], data sources, or models.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AlarmScreen(viewModel: AlarmViewModel = viewModel()) {
+fun AlarmScreen(viewModel: AlarmViewModel) {
 
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // ── Permission request trigger (driven by LaunchNotificationPermission effect) ──
     var shouldRequestPermission by remember { mutableStateOf(false) }
 
     // ── Consume one-shot effects ──────────────────────────────────────────────
-    LaunchedEffect(Unit) {
+    LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                AlarmEffect.TriggerAlarmNotification  -> viewModel.showAlarmNotification()
-                AlarmEffect.CancelAlarmNotification   -> viewModel.cancelAlarmNotification()
-                AlarmEffect.LaunchNotificationPermission -> shouldRequestPermission = true
+                AlarmEffect.LaunchNotificationPermission -> {
+                    if (Build.VERSION.SDK_INT >= 33) shouldRequestPermission = true
+                    else viewModel.processIntent(AlarmIntent.OpenSettings)
+                }
                 AlarmEffect.OpenAppSettings -> {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                         data = Uri.fromParts("package", context.packageName, null)
                     }
-                    context.startActivity(intent)
+                    try { context.startActivity(intent) }
+                    catch (error: Exception) { viewModel.processIntent(AlarmIntent.ReportError(error)) }
                 }
             }
         }
@@ -132,12 +138,23 @@ fun AlarmScreen(viewModel: AlarmViewModel = viewModel()) {
                     AlarmIntent.NotificationPermissionResult(granted = false, permanentlyDenied = false)
                 )
             },
+            onStatusChanged = { granted, permanent ->
+                viewModel.processIntent(AlarmIntent.SyncNotificationPermission(granted, permanent))
+            },
+            onError = { viewModel.processIntent(AlarmIntent.ReportError(it)) },
             onPermanentlyDenied = {
                 viewModel.processIntent(
                     AlarmIntent.NotificationPermissionResult(granted = false, permanentlyDenied = true)
                 )
             }
         )
+    }
+
+    if (Build.VERSION.SDK_INT < 33) {
+        LifecycleResumeEffect(Unit) {
+            viewModel.processIntent(AlarmIntent.SyncNotificationPermission(true, false))
+            onPauseOrDispose { }
+        }
     }
 
     // ── Root layout ────────────────────────────────────────────────────────────
@@ -149,6 +166,8 @@ fun AlarmScreen(viewModel: AlarmViewModel = viewModel()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -176,12 +195,21 @@ fun AlarmScreen(viewModel: AlarmViewModel = viewModel()) {
             Spacer(Modifier.height(16.dp))
 
             // Notification permission banner (shown when denied/permanently denied)
-            NotificationPermissionBanner(state, viewModel)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Avisos de alarma", color = TextPrimary, modifier = Modifier.weight(1f))
+                Switch(modifier = Modifier.semantics { contentDescription = "Avisos de alarma" },
+                    checked = state.notificationsEnabled, onCheckedChange = {
+                    viewModel.processIntent(AlarmIntent.SetNotificationsEnabled(it))
+                })
+            }
+            if (state.notificationsEnabled) NotificationPermissionBanner(state, viewModel)
+            state.errorMessage?.let { Text(it, color = DangerRed) }
 
             Spacer(Modifier.height(16.dp))
 
             // Action buttons
             ActionButtons(state, viewModel)
+            Spacer(Modifier.height(24.dp))
         }
 
         // Alarm triggered overlay

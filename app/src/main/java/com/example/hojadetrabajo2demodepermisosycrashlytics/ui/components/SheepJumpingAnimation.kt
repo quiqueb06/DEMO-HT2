@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -60,7 +61,7 @@ fun SheepJumpingAnimation(
                 delay(350L)              // brief pause before next jump
             }
         } else {
-            jumpProgress.animateTo(0f, animationSpec = tween(200))
+            jumpProgress.snapTo(0f)
         }
     }
 
@@ -76,8 +77,12 @@ fun SheepJumpingAnimation(
             .fillMaxWidth()
             .height(220.dp)
         ) {
-            val w = size.width
-            val h = size.height
+            // A fixed design space keeps the arc and fence proportional on every density.
+            val scaleX = size.width / 360f
+            val scaleY = size.height / 220f
+            withTransform({ scale(scaleX, scaleY, pivot = Offset.Zero) }) {
+            val w = 360f
+            val h = 220f
             val groundY = h * 0.78f
 
             // ── Ground ─────────────────────────────────────────────
@@ -109,15 +114,14 @@ fun SheepJumpingAnimation(
             val sheepX = startX + (endX - startX) * p
 
             // Parabola: y = -4 * maxHeight * p * (p - 1)  (peak at p=0.5)
-            val maxJumpPx = 105f
+            val maxJumpPx = h * 0.55f
             val sheepLiftY = -4f * maxJumpPx * p * (p - 1f)
-            val sheepBaseY = groundY + sheepLiftY
+            val sheepBaseY = groundY - sheepLiftY
 
-            // Draw sheep body behind or in front of fence based on horizontal position
-            if (p < 0.5f) {
-                drawSheep(centerX = sheepX, baseY = sheepBaseY, facingRight = true)
-            } else {
-                drawSheep(centerX = sheepX, baseY = sheepBaseY, facingRight = true)
+            withTransform({
+                translate(sheepX, sheepBaseY)
+                scale(0.65f, 0.65f, pivot = Offset.Zero)
+            }) { drawSheep(centerX = 0f, baseY = 0f, facingRight = true) }
             }
         }
     }
@@ -134,10 +138,10 @@ private fun DrawScope.drawFenceWithSign(
     textMeasurer: androidx.compose.ui.text.TextMeasurer
 ) {
     val fenceColor = Color(0xFF6D4C41)
-    val postW  = 16f
-    val postH  = 100f
-    val railW  = 210f
-    val railH  = 12f
+    val postW  = 8f
+    val postH  = 55f
+    val railW  = 160f
+    val railH  = 6f
     val postTop = groundY - postH
 
     val left  = centerX - railW / 2f
@@ -149,11 +153,11 @@ private fun DrawScope.drawFenceWithSign(
 
     // Rails
     drawRect(fenceColor, Offset(left, postTop + 8f), Size(railW, railH))
-    drawRect(fenceColor, Offset(left, postTop + 55f), Size(railW, railH))
+    drawRect(fenceColor, Offset(left, postTop + 35f), Size(railW, railH))
 
     // Sign board
-    val signW = 185f
-    val signH = 52f
+    val signW = 140f
+    val signH = 30f
     val signLeft = centerX - signW / 2f
     val signTop  = postTop - signH - 6f
 
@@ -168,7 +172,7 @@ private fun DrawScope.drawFenceWithSign(
     // Time label on sign
     val measured = textMeasurer.measure(
         text = timeLabel,
-        style = TextStyle(color = Color(0xFF1A237E), fontSize = 20.sp)
+        style = TextStyle(color = Color(0xFF1A237E), fontSize = (20f / density / fontScale).sp)
     )
     drawText(
         textLayoutResult = measured,
