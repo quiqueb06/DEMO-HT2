@@ -1,6 +1,9 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics
 
 import androidx.lifecycle.ViewModelStore
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.datasource.PermissionDataSource
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.PermissionRepositoryImpl
+import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.permission.NotificationPermissionStatus
 import com.example.hojadetrabajo2demodepermisosycrashlytics.data.datasource.AlarmLocalDataSource
 import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.AlarmRepositoryImpl
 import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.crash.CrashReporter
@@ -29,11 +32,12 @@ class AlarmViewModelTest {
     private val source = AlarmLocalDataSource { now }
     private val reporter = RecordingReporter()
     private val notifier = FakeNotifier()
+    private val permissionSource = FakePermissionSource { notifier.available }
     private lateinit var vm: AlarmViewModel
 
     @Before fun setup() {
         Dispatchers.setMain(dispatcher)
-        vm = AlarmViewModel(AlarmRepositoryImpl(source), notifier, reporter)
+        vm = AlarmViewModel(AlarmRepositoryImpl(source), notifier, reporter, PermissionRepositoryImpl(permissionSource))
         store.put("alarm", vm)
     }
     @After fun cleanup() { store.clear(); Dispatchers.resetMain() }
@@ -53,11 +57,11 @@ class AlarmViewModelTest {
 
     @Test fun bothDenialsKeepSheepJumping() = vmTest {
         vm.processIntent(AlarmIntent.SetAlarm(10, 1))
-        vm.processIntent(AlarmIntent.NotificationPermissionResult(false, false))
+        vm.processIntent(AlarmIntent.NotificationPermissionResult(false, true))
         runCurrent()
         assertEquals(NotificationPermissionStatus.DENIED, vm.uiState.value.notificationPermission)
         assertTrue(vm.uiState.value.isSheepJumping)
-        vm.processIntent(AlarmIntent.NotificationPermissionResult(false, true))
+        vm.processIntent(AlarmIntent.NotificationPermissionResult(false, false))
         runCurrent()
         assertEquals(NotificationPermissionStatus.PERMANENTLY_DENIED, vm.uiState.value.notificationPermission)
         assertTrue(vm.uiState.value.isSheepJumping)
@@ -106,11 +110,11 @@ class AlarmViewModelTest {
     }
 
     @Test fun settingsRefreshDoesNotShowRationaleAndUpdatesPermission() = vmTest {
-        vm.processIntent(AlarmIntent.SyncNotificationPermission(false, false))
+        vm.processIntent(AlarmIntent.SyncNotificationPermission(false))
         runCurrent()
         assertFalse(vm.uiState.value.showNotificationRationale)
         notifier.available = true
-        vm.processIntent(AlarmIntent.SyncNotificationPermission(true, false))
+        vm.processIntent(AlarmIntent.SyncNotificationPermission(false))
         runCurrent()
         assertEquals(NotificationPermissionStatus.GRANTED, vm.uiState.value.notificationPermission)
     }
@@ -155,6 +159,14 @@ class AlarmViewModelTest {
 
     private fun vmTest(block: suspend TestScope.() -> Unit) = runTest(dispatcher) {
         try { block() } finally { store.clear() }
+    }
+
+    private class FakePermissionSource(private val granted: () -> Boolean) : PermissionDataSource {
+        override val notificationRuntimePermission = "test.permission.NOTIFICATIONS"
+        private var observed = false
+        override fun isGranted(permission: String) = granted()
+        override fun wasRationaleObserved(permission: String) = observed
+        override fun setRationaleObserved(permission: String, observed: Boolean) { this.observed = observed }
     }
 
     private class FakeNotifier : AlarmNotifier {

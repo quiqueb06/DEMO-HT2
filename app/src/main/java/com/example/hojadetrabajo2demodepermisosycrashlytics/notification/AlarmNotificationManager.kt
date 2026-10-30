@@ -4,14 +4,13 @@ import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.PermissionRepository
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import com.example.hojadetrabajo2demodepermisosycrashlytics.MainActivity
 
 /**
@@ -21,7 +20,7 @@ import com.example.hojadetrabajo2demodepermisosycrashlytics.MainActivity
  *
  * @param context Application context — safe to store long-term.
  */
-class AlarmNotificationManager(private val context: Context) : AlarmNotifier {
+class AlarmNotificationManager(private val context: Context, private val permissions: PermissionRepository) : AlarmNotifier {
 
     private val preferences = context.getSharedPreferences("alarm_notifications", Context.MODE_PRIVATE)
     override var notificationsEnabled: Boolean
@@ -29,9 +28,7 @@ class AlarmNotificationManager(private val context: Context) : AlarmNotifier {
         set(value) { preferences.edit().putBoolean("enabled", value).apply() }
 
     override fun canNotify(): Boolean {
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED) return false
+        if (!permissions.isGranted(Manifest.permission.POST_NOTIFICATIONS)) return false
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
         return Build.VERSION.SDK_INT < 26 ||
             context.getSystemService(NotificationManager::class.java)

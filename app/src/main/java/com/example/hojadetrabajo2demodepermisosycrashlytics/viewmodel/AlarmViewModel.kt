@@ -1,5 +1,7 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics.viewmodel
 
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.PermissionRepository
+import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.permission.NotificationPermissionStatus
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.AlarmRepository
@@ -17,9 +19,14 @@ import kotlinx.coroutines.launch
 class AlarmViewModel(
     private val repository: AlarmRepository,
     private val notifier: AlarmNotifier,
-    private val crashReporter: CrashReporter
+    private val crashReporter: CrashReporter,
+    private val permissions: PermissionRepository
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(AlarmUiState(notificationsEnabled = notifier.notificationsEnabled))
+    private var lastRationale = false
+    private val _uiState = MutableStateFlow(AlarmUiState(
+        notificationsEnabled = notifier.notificationsEnabled,
+        notificationRuntimePermission = permissions.notificationRuntimePermission
+    ))
     val uiState: StateFlow<AlarmUiState> = _uiState.asStateFlow()
     private val _effects = Channel<AlarmEffect>(Channel.BUFFERED)
     val effects = _effects.receiveAsFlow()
@@ -71,10 +78,17 @@ class AlarmViewModel(
                         if (intent.enabled) enableNotifications() else notifier.cancelNotification()
                     }
                     is AlarmIntent.NotificationPermissionResult -> {
-                        updatePermission(intent.granted, intent.permanentlyDenied)
-                        _uiState.update { it.copy(showNotificationRationale = !intent.granted) }
+                        lastRationale = intent.canShowRationale
+                        val status = permissions.onResult(
+                            permissions.notificationRuntimePermission, intent.granted, intent.canShowRationale
+                        )
+                        updatePermission(status)
+                        _uiState.update { it.copy(showNotificationRationale = it.notificationPermission != NotificationPermissionStatus.GRANTED) }
                     }
-                    is AlarmIntent.SyncNotificationPermission -> updatePermission(intent.granted, intent.permanentlyDenied)
+                    is AlarmIntent.SyncNotificationPermission -> {
+                        lastRationale = intent.canShowRationale
+                        updatePermission(permissions.refresh(permissions.notificationRuntimePermission, lastRationale))
+                    }
                     is AlarmIntent.ReportError -> throw intent.error
                     AlarmIntent.OpenSettings -> {
                         _uiState.update { it.copy(showNotificationRationale = false) }
@@ -89,22 +103,24 @@ class AlarmViewModel(
     private suspend fun enableNotifications() {
         notifier.notificationsEnabled = true
         _uiState.update { it.copy(notificationsEnabled = true, showNotificationRationale = false) }
+        val status = permissions.refresh(permissions.notificationRuntimePermission, lastRationale)
+        updatePermission(status)
         when {
-            notifier.canNotify() -> updatePermission(true, false)
-            _uiState.value.notificationPermission == NotificationPermissionStatus.PERMANENTLY_DENIED ->
+            status == NotificationPermissionStatus.GRANTED -> {
+                if (!notifier.canNotify()) _effects.send(AlarmEffect.OpenAppSettings)
+            }
+            status == NotificationPermissionStatus.PERMANENTLY_DENIED ->
                 _uiState.update { it.copy(showNotificationRationale = true) }
             else -> _effects.send(AlarmEffect.LaunchNotificationPermission)
         }
     }
 
-    private fun updatePermission(granted: Boolean, permanent: Boolean) {
+    private fun updatePermission(status: NotificationPermissionStatus) {
+        val effective = if (status == NotificationPermissionStatus.GRANTED && !notifier.canNotify())
+            NotificationPermissionStatus.PERMANENTLY_DENIED else status
         _uiState.update { it.copy(
-            notificationPermission = when {
-                granted && notifier.canNotify() -> NotificationPermissionStatus.GRANTED
-                permanent || granted -> NotificationPermissionStatus.PERMANENTLY_DENIED
-                else -> NotificationPermissionStatus.DENIED
-            },
-            showNotificationRationale = if (granted && notifier.canNotify()) false else it.showNotificationRationale
+            notificationPermission = effective,
+            showNotificationRationale = if (effective == NotificationPermissionStatus.GRANTED) false else it.showNotificationRationale
         ) }
     }
 

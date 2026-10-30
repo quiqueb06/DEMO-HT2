@@ -1,22 +1,6 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics.mvi
 
-/**
- * Status of the POST_NOTIFICATIONS runtime permission.
- * Used to decide what to show in the UI and whether to send system notifications.
- */
-enum class NotificationPermissionStatus {
-    /** Android < 13, or permission not yet evaluated on this session. */
-    NOT_REQUESTED,
-
-    /** User granted the permission (or API level < 33, always allowed). */
-    GRANTED,
-
-    /** User denied once — rationale should be shown; can request again. */
-    DENIED,
-
-    /** User tapped "Don't ask again" — only Settings can unblock it. */
-    PERMANENTLY_DENIED
-}
+import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.permission.NotificationPermissionStatus
 
 /**
  * Single, immutable snapshot of everything the UI needs to render.
@@ -33,6 +17,7 @@ enum class NotificationPermissionStatus {
  * @property showNotificationRationale Whether to display the rationale dialog.
  */
 data class AlarmUiState(
+    val notificationRuntimePermission: String? = null,
     val notificationsEnabled: Boolean = false,
     val errorMessage: String? = null,
     val currentTime: String = "00:00:00",

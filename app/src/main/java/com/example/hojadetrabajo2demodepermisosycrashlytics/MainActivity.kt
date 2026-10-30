@@ -1,6 +1,8 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics
 
 import android.os.Bundle
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.datasource.AndroidPermissionDataSource
+import com.example.hojadetrabajo2demodepermisosycrashlytics.data.repository.PermissionRepositoryImpl
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -32,13 +34,14 @@ class MainActivity : ComponentActivity() {
         // Create notification channel once on startup.
         // Safe to call multiple times — the OS ignores duplicate channel creation.
         val reporter = LogCrashReporter()
-        val notifications = AlarmNotificationManager(applicationContext)
+        val permissions = PermissionRepositoryImpl(AndroidPermissionDataSource(applicationContext))
+        val notifications = AlarmNotificationManager(applicationContext, permissions)
         runCatching { notifications.createNotificationChannel() }.onFailure(reporter::report)
         val factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass.isAssignableFrom(AlarmViewModel::class.java))
                 @Suppress("UNCHECKED_CAST")
-                return AlarmViewModel(AlarmRepositoryImpl(AlarmLocalDataSource()), notifications, reporter) as T
+                return AlarmViewModel(AlarmRepositoryImpl(AlarmLocalDataSource()), notifications, reporter, permissions) as T
             }
         }
 

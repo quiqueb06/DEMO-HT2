@@ -1,9 +1,7 @@
 package com.example.hojadetrabajo2demodepermisosycrashlytics.ui.screen
 
-import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
@@ -20,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Switch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,8 +64,8 @@ import androidx.compose.ui.window.Dialog
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmEffect
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmIntent
 import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.AlarmUiState
-import com.example.hojadetrabajo2demodepermisosycrashlytics.mvi.NotificationPermissionStatus
-import com.example.hojadetrabajo2demodepermisosycrashlytics.ui.components.PermissionHandler
+import com.example.hojadetrabajo2demodepermisosycrashlytics.domain.permission.NotificationPermissionStatus
+import com.example.hojadetrabajo2demodepermisosycrashlytics.platform.permissions.PermissionHandler
 import com.example.hojadetrabajo2demodepermisosycrashlytics.ui.components.SheepJumpingAnimation
 import com.example.hojadetrabajo2demodepermisosycrashlytics.viewmodel.AlarmViewModel
 
@@ -107,10 +104,7 @@ fun AlarmScreen(viewModel: AlarmViewModel) {
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                AlarmEffect.LaunchNotificationPermission -> {
-                    if (Build.VERSION.SDK_INT >= 33) shouldRequestPermission = true
-                    else viewModel.processIntent(AlarmIntent.OpenSettings)
-                }
+                AlarmEffect.LaunchNotificationPermission -> shouldRequestPermission = true
                 AlarmEffect.OpenAppSettings -> {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                         data = Uri.fromParts("package", context.packageName, null)
@@ -122,40 +116,19 @@ fun AlarmScreen(viewModel: AlarmViewModel) {
         }
     }
 
-    // ── Generic POST_NOTIFICATIONS permission handler (Android 13+ only) ─────
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        PermissionHandler(
-            permission = Manifest.permission.POST_NOTIFICATIONS,
-            shouldRequest = shouldRequestPermission,
-            onConsumed = { shouldRequestPermission = false },
-            onGranted = {
-                viewModel.processIntent(
-                    AlarmIntent.NotificationPermissionResult(granted = true, permanentlyDenied = false)
-                )
-            },
-            onDenied = {
-                viewModel.processIntent(
-                    AlarmIntent.NotificationPermissionResult(granted = false, permanentlyDenied = false)
-                )
-            },
-            onStatusChanged = { granted, permanent ->
-                viewModel.processIntent(AlarmIntent.SyncNotificationPermission(granted, permanent))
-            },
-            onError = { viewModel.processIntent(AlarmIntent.ReportError(it)) },
-            onPermanentlyDenied = {
-                viewModel.processIntent(
-                    AlarmIntent.NotificationPermissionResult(granted = false, permanentlyDenied = true)
-                )
-            }
-        )
-    }
-
-    if (Build.VERSION.SDK_INT < 33) {
-        LifecycleResumeEffect(Unit) {
-            viewModel.processIntent(AlarmIntent.SyncNotificationPermission(true, false))
-            onPauseOrDispose { }
-        }
-    }
+    // Platform bridge forwards raw observations through MVI; repository owns the policy.
+    PermissionHandler(
+        permission = state.notificationRuntimePermission,
+        shouldRequest = shouldRequestPermission,
+        onConsumed = { shouldRequestPermission = false },
+        onResult = { granted, rationale ->
+            viewModel.processIntent(AlarmIntent.NotificationPermissionResult(granted, rationale))
+        },
+        onObserved = { rationale ->
+            viewModel.processIntent(AlarmIntent.SyncNotificationPermission(rationale))
+        },
+        onError = { viewModel.processIntent(AlarmIntent.ReportError(it)) }
+    )
 
     // ── Root layout ────────────────────────────────────────────────────────────
     Box(
